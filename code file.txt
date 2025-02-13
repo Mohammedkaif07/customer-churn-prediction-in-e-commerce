@@ -1,0 +1,382 @@
+
+
+#Libraries
+
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+warnings.filterwarnings('ignore')
+
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+from scipy.stats import uniform
+from imblearn.over_sampling import SMOTE
+from sklearn.linear_model import LogisticRegression
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.metrics import precision_recall_curve, auc
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+
+"""#Load Data"""
+
+# Load the dataset
+data = pd.read_csv('/content/ecommerce_customer_data_custom_ratios.csv')
+
+data.head()
+
+data.shape
+
+data.info()
+
+"""# Data Visualization
+
+
+# Countplot of categorical variables
+sns.countplot(x='Gender', data=data)
+#sns.countplot(data['Gender'])
+plt.title('Gender Distribution')
+plt.show()
+
+churn_counts = data["Churn"].value_counts()
+
+# Create a pie chart
+plt.figure(figsize=(8, 6))
+churn_counts.plot.pie(
+    autopct='%1.2f%%',  # Show percentages
+    startangle=90,      # Start at 90 degrees
+    labels=['Not Churned', 'Churned'],  # Add labels
+    colors=['lightblue', 'orange'],    # Colors for the pie
+)
+
+plt.title("Customer Churn Distribution")
+plt.ylabel("")  # Hide the y-axis label
+plt.show()
+
+# Correlation heatmap
+plt.figure(figsize=(10, 6))
+sns.heatmap(data.select_dtypes(include=['float64', 'int64']).corr(), annot=True, cmap='plasma')
+
+"""RFM"""
+
+# 'Purchase Date' is datetime
+data['Purchase Date'] = pd.to_datetime(data['Purchase Date'])
+
+# Find the most recent purchase date in the dataset
+max_date = data['Purchase Date'].max()
+
+# Calculate Recency for each Customer ID
+data['Recency'] = data.groupby('Customer ID')['Purchase Date'].transform(lambda x: (max_date - x.max()).days)
+
+# Count the number of transactions for each Customer ID
+data['Frequency'] = data.groupby('Customer ID')['Purchase Date'].transform('count')
+
+# Sum the Total Purchase Amount for each Customer ID
+data['Monetary'] = data.groupby('Customer ID')['Total Purchase Amount'].transform('sum')
+
+data[['Recency','Frequency','Monetary']].head()
+
+"""#Data processing"""
+
+# Drop columns that don't add value for predictions
+data = data.drop(columns=['Customer ID', 'Customer Name', 'Purchase Date', 'Age'])
+
+# Check for missing values
+data.isnull().sum()
+
+# Fill missing values for numerical columns with the median
+missing_values_cols = ['Returns']
+for col in missing_values_cols:
+    data[col].fillna(data[col].median(), inplace=True)
+
+# Verify there are no missing values left
+data.isnull().sum()
+
+# Detect outliers using IQR
+def handle_outliers(df, col):
+    Q1 = df[col].quantile(0.25)  # First quartile
+    Q3 = df[col].quantile(0.75)  # Third quartile
+    IQR = Q3 - Q1  # Interquartile range
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+
+    # Identify outliers
+    outliers = ((df[col] < lower_bound) | (df[col] > upper_bound))
+
+    # Count and print the number of outliers
+    num_outliers = outliers.sum()
+    print(f"Number of outliers in '{col}': {num_outliers}")
+
+
+# Apply the function to numerical columns
+numerical_cols = ['Product Price', 'Quantity', 'Total Purchase Amount', 'Customer Age', 'Returns']
+for col in numerical_cols:
+    handle_outliers(data, col)
+
+"""# Feature Engineering
+
+Encode Categorical Variables
+"""
+
+# Encode categorical columns
+le = LabelEncoder()
+for column in ['Product Category', 'Payment Method', 'Gender']:
+    data[column] = le.fit_transform(data[column])
+
+"""Scale Numerical Features"""
+
+scaler = StandardScaler()
+numerical_features = ['Product Price', 'Quantity', 'Total Purchase Amount', 'Customer Age', 'Returns']
+data[numerical_features] = scaler.fit_transform(data[numerical_features])
+
+"""Define Target and Features"""
+
+X = data.drop(columns=['Churn'])  # Features
+y = data['Churn']  # Target
+
+"""Splitting the Data"""
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+"""Data balancing using SMOTE"""
+
+# Class Imbalance using SMOTE
+smote = SMOTE(random_state=42)
+X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
+
+"""# K-Means Clustering
+
+"""
+
+# Apply K-Means clustering on the balanced dataset
+kmeans = KMeans(n_clusters=3, random_state=42)
+
+# Calculate WCSS for different values of k (number of clusters)
+wcss = []
+for k in range(1, 11):  # Try cluster counts from 1 to 10
+    kmeans = KMeans(n_clusters=k, random_state=42)
+    kmeans.fit(X_train_balanced)
+    wcss.append(kmeans.inertia_)
+
+# Plot the Elbow Method
+plt.figure(figsize=(8, 6))
+plt.plot(range(1, 11), wcss, marker='o', linestyle='--')
+plt.title('Elbow Method for Optimal k')
+plt.xlabel('Number of Clusters (k)')
+plt.ylabel('WCSS')
+plt.show()
+
+# Print a message indicating the Elbow Curve has been plotted
+print("Elbow Curve plotted successfully. Use the 'elbow' point to determine the optimal number of clusters.")
+
+# Use PCA for dimensionality reduction to 2D for visualization
+pca = PCA(n_components=2)
+reduced_data = pca.fit_transform(X_train_balanced)  # Apply PCA to the balanced training dataset
+
+optimal_k = 3
+kmeans = KMeans(n_clusters=optimal_k, random_state=42)
+clusters = kmeans.fit_predict(X_train_balanced)
+
+# Visualize Clusters
+# Create a DataFrame for the reduced data
+clustered_data = pd.DataFrame(reduced_data, columns=['PCA1', 'PCA2']) # Store PCA-reduced features
+clustered_data['Cluster'] = clusters
+
+# Plot the clusters
+plt.figure(figsize=(10, 7))
+for cluster in range(optimal_k):
+    cluster_points = clustered_data[clustered_data['Cluster'] == cluster] # Filter data for the current cluster
+    plt.scatter(cluster_points['PCA1'], cluster_points['PCA2'], label=f'Cluster {cluster}', s=100)
+
+# Add centroids to the plot
+centroids = kmeans.cluster_centers_
+centroids_reduced = pca.transform(centroids) # Reduce centroids to 2D using PCA
+plt.scatter(centroids_reduced[:, 0], centroids_reduced[:, 1], c='black', marker='X', s=200, label='Centroids')
+
+plt.title('K-Means Clusters (PCA-Reduced)')
+plt.xlabel('PCA1')
+plt.ylabel('PCA2')
+plt.legend()
+plt.show()
+
+"""#Machine Learning Models
+
+Logistic Regression
+"""
+
+# Hyperparameter tuning for Logistic Regression
+param_grid_lr = {'C': [0.1, 1, 10, 100]}
+grid_search_lr = GridSearchCV(LogisticRegression(), param_grid_lr, scoring='accuracy', cv=5)
+grid_search_lr.fit(X_train_balanced, y_train_balanced )
+print("Best Parameters (Logistic Regression):", grid_search_lr.best_params_)
+
+# Train the best model
+lr = LogisticRegression(C=grid_search_lr.best_params_['C'])
+lr.fit(X_train_balanced, y_train_balanced )
+
+y_pred_lr = lr.predict(X_test)
+
+# Evaluation
+print("Logistic Regression Accuracy:", accuracy_score(y_test, y_pred_lr))
+
+#confusion matrix
+print("confusion matrix:\n", confusion_matrix(y_test, y_pred_lr))
+
+
+print("Classification Report:\n", classification_report(y_test, y_pred_lr))
+
+"""Decision Tree"""
+
+# Define the parameter grid
+param_grid_dt = {
+    'max_depth': [5, 10, 15, None],
+    'min_samples_split': [2, 5],
+    'min_samples_leaf': [1, 2],
+}
+
+grid_search_dt = GridSearchCV(DecisionTreeClassifier(random_state=42), param_grid_dt, scoring='accuracy', cv=5)
+
+# Fit to training data
+grid_search_dt.fit(X_train_balanced, y_train_balanced)
+print("Best Parameters (Decision Tree):", grid_search_dt.best_params_)
+
+# Train the Decision Tree with the best parameters
+dt = DecisionTreeClassifier(**grid_search_dt.best_params_, random_state=42)
+dt.fit(X_train_balanced, y_train_balanced)
+
+# Make predictions on the test set
+y_pred_dt = dt.predict(X_test)
+
+# Test accuracy
+print("Decision Tree Accuracy:", accuracy_score(y_test, y_pred_dt))
+
+#confusion matrix
+print("confusion matrix:\n", confusion_matrix(y_test, y_pred_dt))
+
+
+# Classification report
+print("Classification Report:\n", classification_report(y_test, y_pred_dt))
+
+"""Random Forest"""
+
+# Shrinking the parameter grid further
+param_grid = {
+    'n_estimators': [50, 100],
+    'max_depth': [None, 10],
+    'min_samples_split': [2, 5],
+    'min_samples_leaf': [1, 2],
+    'max_features': ['sqrt']
+}
+
+# Randomized search with fewer iterations
+random_search_rf = RandomizedSearchCV(
+    estimator=RandomForestClassifier(random_state=42),
+    param_distributions=param_grid,
+    n_iter=5,  # Fewer iterations
+    scoring='accuracy',
+    cv=2,  # Using 2-fold instead of 3-fold
+    verbose=1,
+    random_state=42,
+    n_jobs=-1  # Use all cores for parallel processing
+)
+
+# Fit the model
+random_search_rf.fit(X_train_balanced, y_train_balanced)
+# Print the best parameters and accuracy
+print(f"Best Parameters: {random_search_rf.best_params_}")
+
+# Train model
+best_rf_model = random_search_rf.best_estimator_
+y_pred_rf = best_rf_model.predict(X_test)
+
+# Evaluation
+print(f"Random Forest Test Accuracy: {accuracy_score(y_test, y_pred_rf)}")
+
+#confusion matrix
+print("confusion matrix:\n", confusion_matrix(y_test, y_pred_rf))
+
+
+print("Classification Report:\n", classification_report(y_test, y_pred_rf))
+
+"""Gradient Boosting"""
+
+# Define the parameter grid
+param_dist = {
+    'n_estimators': [50, 100],  # Number of trees
+    'learning_rate': uniform(0.01, 0.1),  # Range of learning rates
+    'max_depth': [3, 5],  # Depth of the trees
+    'min_samples_split': [2, 5],  # Minimum samples to split a node
+    'min_samples_leaf': [1, 2],  # Minimum samples in a leaf node
+    'subsample': [0.8, 1.0],  # Fraction of samples used for training each tree
+    'max_features': ['sqrt', 'log2']  # Number of features to consider for splits
+}
+
+
+# RandomizedSearchCV with iterations and cross-validation folds
+random_search_gb = RandomizedSearchCV(
+    estimator=GradientBoostingClassifier(random_state=42, warm_start=True, n_iter_no_change=5, tol=0.01),
+    param_distributions=param_dist,
+    n_iter=10,  # Reduce number of iterations to 10
+    scoring='accuracy',
+    cv=3,  # Use 3-fold cross-validation
+    verbose=1,
+    random_state=42,
+    n_jobs=-1  # Use all cores for parallelism
+)
+
+
+# Fit the model
+random_search_gb.fit(X_train_balanced, y_train_balanced)
+# Print the best parameters and accuracy
+print(f"Best Parameters: {random_search_gb.best_params_}")
+
+# Train model
+best_gb_model = random_search_gb.best_estimator_
+y_pred_gb = best_gb_model.predict(X_test)
+
+# Evaluation
+print("Accuracy:", accuracy_score(y_test, y_pred_gb))
+
+#confusion matrix
+print("confusion matrix:\n", confusion_matrix(y_test, y_pred_gb))
+
+
+print("Classification Report:\n", classification_report(y_test, y_pred_gb))
+
+# Collect results
+results = pd.DataFrame({
+    'Model': ['Logistic Regression', 'Decision Tree','Random Forest', 'Gradient Boosting' ],
+    'Accuracy': [
+        accuracy_score(y_test, y_pred_lr),
+        accuracy_score(y_test, y_pred_dt),
+        accuracy_score(y_test, y_pred_rf),
+        accuracy_score(y_test, y_pred_gb),
+
+    ]
+})
+
+# Plot the results
+plt.figure(figsize=(8, 6))
+barplot = sns.barplot(x='Model', y='Accuracy', data=results, palette='viridis')
+# Add percentage labels on top of the bars
+for bar in barplot.patches:
+    plt.text(bar.get_x() + bar.get_width() / 2,  # Place text in the center of the bar
+             bar.get_height() + 0.01,           # Place text slightly above the bar
+             f"{bar.get_height() * 100:.2f}%",  # Format height as a percentage
+             ha='center', fontsize=10)          # Center the text and set font size
+
+plt.title("Model Comparison with Percentages")
+plt.ylabel("Accuracy")
+plt.xlabel("")
+plt.xticks(rotation=15)
+plt.tight_layout()
+plt.show()
+
